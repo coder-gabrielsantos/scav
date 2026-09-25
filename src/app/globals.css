@@ -1,0 +1,50 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "@fontsource-variable/nunito";
+@import "@fontsource-variable/space-grotesk";
+
+@theme {
+  --font-sans: "Nunito Variable", "Segoe UI", Arial, sans-serif;
+  --font-display: "Space Grotesk Variable", "Segoe UI", Arial, sans-serif;
+  --color-background: #ffffff;
+  --color-foreground: #172c43;
+  --color-primary: #285ec9;
+  --color-primary-foreground: #ffffff;
+  --color-secondary: #eaf0fc;
+  --color-secondary-foreground: #2853a2;
+  --color-muted: #f2f5f9;
+  --color-muted-foreground: #687b92;
+  --color-accent: #edf2fc;
+  --color-accent-foreground: #214eaa;
+  --color-destructive: #ba3e48;
+  --color-border: #dce3ec;
+  --color-input: #cbd7e6;
+  --color-ring: #5884dc;
+  --color-canvas: #f3f6fa;
+  --color-sidebar: #152b44;
+  --color-sidebar-muted: #a1b4cc;
+  --shadow-panel: 0 12px 36px -22px rgb(24 48 84 / 22%);
+}
+
+body {
+  margin: 0;
+}
+
+@layer base {
+  * { border-color: var(--color-border); }
+  button:not(:disabled), select { cursor: pointer; }
+  html { scroll-padding-top: 24px; }
+  ::selection { background: #dae6ff; color: #163f8c; }
+}
+
+@layer components {
+  .scav-panel { @apply rounded-2xl border bg-white shadow-panel; }
+  .scav-kicker { @apply text-xs font-bold uppercase tracking-[0.14em] text-primary; }
+  .scav-field { @apply w-full rounded-xl border border-input bg-white px-4 py-3 text-sm outline-none transition focus:border-primary focus:ring-4 focus:ring-primary/10 disabled:opacity-60; }
+  .scav-sidebar { scrollbar-width: thin; scrollbar-color: #3d5e8c #152b44; }
+  .scav-metric-featured { background: radial-gradient(circle at 86% 12%, transparent 0 64px, rgb(255 255 255 / 3%) 65px 108px, transparent 109px), #152b44; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}

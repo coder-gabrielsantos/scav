@@ -1,0 +1,275 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "mysql"
+}
+
+/// Perfis fixos do MVP: um perfil por usuário.
+enum Role {
+  GESTAO
+  COORDENACAO
+  PROFESSOR
+  SECRETARIA
+}
+
+/// Atraso é calculado pelo prazo; não é um estado persistido.
+enum AssessmentStatus {
+  PENDING_SUBMISSION
+  UNDER_REVIEW
+  APPROVED
+  CHANGES_REQUESTED
+}
+
+enum ReviewDecision {
+  APPROVED
+  CHANGES_REQUESTED
+}
+
+enum StorageProvider {
+  SUPABASE
+  S3
+  R2
+}
+
+/// Campos padrão de identidade compatíveis com o Prisma Adapter do Auth.js.
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String    @unique @db.VarChar(191)
+  emailVerified DateTime?
+  image         String?   @db.Text
+  passwordHash    String?   @db.VarChar(255)
+  role            Role      @default(PROFESSOR)
+  institutionName String?   @db.VarChar(191)
+  // Contas convidadas recebem acesso ao confirmar o e-mail pelo Google.
+  isActive        Boolean   @default(false)
+  // Incrementar ao trocar senha/revogar sessões. Alteração de perfil também invalida o JWT.
+  authVersion   Int       @default(0)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  accounts            Account[]
+  sessions            Session[]
+  coordinatedAreas    AreaCoordinator[]
+  teachingAssignments TeacherSubject[]
+  createdDates        AssessmentDate[]            @relation("DateCreator")
+  documents           AssessmentDocument[]        @relation("DocumentTeacher")
+  uploadedVersions    AssessmentDocumentVersion[] @relation("VersionUploader")
+  reviews             AssessmentReview[]          @relation("ReviewCoordinator")
+  sentInvites         UserInvite[]
+
+  @@index([role, isActive])
+}
+
+model SubjectArea {
+  id           String            @id @default(cuid())
+  name         String            @unique @db.VarChar(100)
+  isActive     Boolean           @default(true)
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+  coordinators AreaCoordinator[]
+  subjects     Subject[]
+  slots        AssessmentSlot[]
+}
+
+/// Permite mais de um coordenador por área e mais de uma área por coordenador.
+model AreaCoordinator {
+  subjectAreaId String
+  coordinatorId String
+  createdAt     DateTime    @default(now())
+  subjectArea   SubjectArea @relation(fields: [subjectAreaId], references: [id], onDelete: Restrict)
+  coordinator   User        @relation(fields: [coordinatorId], references: [id], onDelete: Restrict)
+
+  @@id([subjectAreaId, coordinatorId])
+  @@index([coordinatorId])
+}
+
+model Subject {
+  id            String               @id @default(cuid())
+  subjectAreaId String
+  name          String               @db.VarChar(100)
+  isActive      Boolean              @default(true)
+  createdAt     DateTime             @default(now())
+  updatedAt     DateTime             @updatedAt
+  subjectArea   SubjectArea          @relation(fields: [subjectAreaId], references: [id], onDelete: Restrict)
+  teachers      TeacherSubject[]
+  documents     AssessmentDocument[]
+
+  @@unique([subjectAreaId, name])
+}
+
+/// Desativar vínculos preserva as provas já atribuídas ao professor.
+model TeacherSubject {
+  teacherId String
+  subjectId String
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  teacher   User     @relation(fields: [teacherId], references: [id], onDelete: Restrict)
+  subject   Subject  @relation(fields: [subjectId], references: [id], onDelete: Restrict)
+
+  @@id([teacherId, subjectId])
+  @@index([subjectId, isActive])
+}
+
+/// Um dia civil da escola, sem horário. Validar segunda-feira no servidor.
+model AssessmentDate {
+  id          String           @id @default(cuid())
+  date        DateTime         @unique @db.Date
+  notes       String?          @db.Text
+  createdById String
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+  createdBy   User             @relation("DateCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  slots       AssessmentSlot[]
+
+  @@index([createdById])
+}
+
+/// Cada checkbox da Gestão cria um slot: data + área, com prazo explícito.
+model AssessmentSlot {
+  id                 String               @id @default(cuid())
+  assessmentDateId   String
+  subjectAreaId      String
+  submissionDeadline DateTime             @db.DateTime(3)
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
+  assessmentDate     AssessmentDate       @relation(fields: [assessmentDateId], references: [id], onDelete: Restrict)
+  subjectArea        SubjectArea          @relation(fields: [subjectAreaId], references: [id], onDelete: Restrict)
+  documents          AssessmentDocument[]
+
+  @@unique([assessmentDateId, subjectAreaId])
+  @@index([subjectAreaId, submissionDeadline])
+  @@index([submissionDeadline])
+}
+
+/// Uma prova esperada, criada mesmo antes do upload. Arquivos ficam em versions.
+model AssessmentDocument {
+  id        String                      @id @default(cuid())
+  slotId    String
+  teacherId String
+  subjectId String
+  status    AssessmentStatus            @default(PENDING_SUBMISSION)
+  // Incrementado em cada upload/revisão para controle de concorrência otimista.
+  revision  Int                         @default(0)
+  createdAt DateTime                    @default(now())
+  updatedAt DateTime                    @updatedAt
+  slot      AssessmentSlot              @relation(fields: [slotId], references: [id], onDelete: Restrict)
+  teacher   User                        @relation("DocumentTeacher", fields: [teacherId], references: [id], onDelete: Restrict)
+  subject   Subject                     @relation(fields: [subjectId], references: [id], onDelete: Restrict)
+  versions  AssessmentDocumentVersion[]
+
+  @@unique([slotId, teacherId, subjectId])
+  @@index([teacherId, status])
+  @@index([status, slotId])
+  @@index([subjectId])
+}
+
+/// Versões imutáveis. A maior version é a versão atual; reenvio exige nova revisão.
+/// Nenhum binário é armazenado no MySQL, apenas localização e metadados.
+model AssessmentDocumentVersion {
+  id              String             @id @default(cuid())
+  documentId      String
+  version         Int
+  uploadedById    String
+  storageProvider StorageProvider
+  bucket          String             @db.VarChar(191)
+  objectKey       String             @db.VarChar(512)
+  // URL estável do objeto privado, nunca uma URL assinada com expiração.
+  fileUrl         String             @db.Text
+  originalName    String             @db.VarChar(255)
+  mimeType        String             @default("application/pdf") @db.VarChar(100)
+  sizeBytes       Int                @db.UnsignedInt
+  sha256          String             @db.Char(64)
+  uploadedAt      DateTime           @default(now())
+  document        AssessmentDocument @relation(fields: [documentId], references: [id], onDelete: Restrict)
+  uploadedBy      User               @relation("VersionUploader", fields: [uploadedById], references: [id], onDelete: Restrict)
+  review          AssessmentReview?
+
+  @@unique([documentId, version])
+  @@unique([storageProvider, bucket, objectKey])
+  @@index([uploadedById])
+}
+
+/// Uma decisão final por versão; solicitar ajustes exige comentário e novo PDF.
+model AssessmentReview {
+  id            String                    @id @default(cuid())
+  versionId     String                    @unique
+  coordinatorId String
+  decision      ReviewDecision
+  comment       String?                   @db.Text
+  reviewedAt    DateTime                  @default(now())
+  version       AssessmentDocumentVersion @relation(fields: [versionId], references: [id], onDelete: Restrict)
+  coordinator   User                      @relation("ReviewCoordinator", fields: [coordinatorId], references: [id], onDelete: Restrict)
+
+  @@index([coordinatorId, reviewedAt])
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String  @db.VarChar(191)
+  provider          String  @db.VarChar(191)
+  providerAccountId String  @db.VarChar(191)
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String? @db.VarChar(191)
+  scope             String? @db.Text
+  id_token          String? @db.Text
+  session_state     String? @db.VarChar(191)
+  user              User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique @db.VarChar(191)
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model VerificationToken {
+  identifier String   @db.VarChar(191)
+  token      String   @unique @db.VarChar(191)
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+/// Convite vinculado a um e-mail específico. Só o e-mail destinatário pode usar.
+/// GESTAO define a role final; usuário entra via Google e é ativado após aceitar.
+model UserInvite {
+  id           String   @id @default(cuid())
+  email        String   @db.VarChar(191)
+  token        String   @unique @db.Char(43) // base64url(32 bytes) sem padding
+  role         Role
+  invitedById  String
+  createdAt    DateTime @default(now())
+  expiresAt    DateTime
+  acceptedAt   DateTime?
+  revokedAt    DateTime?
+  invitedBy    User     @relation(fields: [invitedById], references: [id], onDelete: Restrict)
+
+  @@index([email])
+  @@index([token])
+  @@index([invitedById])
+}
+
+/// Contador distribuído por e-mail normalizado e janela de 15 minutos.
+/// A chave é SHA-256; não armazena e-mail nem IP no contador.
+model LoginAttemptBucket {
+  key       String   @id @db.Char(64)
+  attempts  Int      @default(0) @db.UnsignedInt
+  expiresAt DateTime
+
+  @@index([expiresAt])
+}

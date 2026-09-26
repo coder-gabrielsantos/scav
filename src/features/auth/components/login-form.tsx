@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useRef, useState } from "react";
 import Link from "next/link";
 import { signIn } from "next-auth/react";
 import { loginAction } from "../actions";
@@ -8,6 +8,23 @@ import { ArrowRight } from "lucide-react";
 
 export function LoginForm() {
   const [state, action, pending] = useActionState(loginAction, {});
+  const googleSignInStarted = useRef(false);
+  const [googlePending, setGooglePending] = useState(false);
+  const [googleError, setGoogleError] = useState(false);
+
+  async function handleGoogleSignIn() {
+    if (googleSignInStarted.current) return;
+    googleSignInStarted.current = true;
+    setGooglePending(true);
+    setGoogleError(false);
+    try {
+      await signIn("google", { callbackUrl: "/dashboard" });
+    } catch {
+      googleSignInStarted.current = false;
+      setGooglePending(false);
+      setGoogleError(true);
+    }
+  }
   const inputClass =
     "mt-2 flex h-[52px] w-full rounded-lg border border-[#E2E8F0] bg-white px-4 text-[15px] text-[#111827] placeholder:text-[#94A3B8] outline-none transition focus:border-[#4F46E5] focus:ring-2 focus:ring-[#4F46E5]/20 disabled:cursor-not-allowed disabled:opacity-60";
 
@@ -103,7 +120,9 @@ export function LoginForm() {
       {/* Botão Google */}
       <button
         type="button"
-        onClick={() => signIn("google", { callbackUrl: "/dashboard" })}
+        onClick={handleGoogleSignIn}
+        disabled={googlePending}
+        aria-busy={googlePending}
         className="flex h-[52px] w-full items-center justify-center gap-3 rounded-full border border-[#94A3B8] bg-white text-[15px] font-semibold text-[#1F2937] transition hover:bg-[#F9FAFB] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#4F46E5]"
       >
         <svg className="size-5" viewBox="0 0 24 24" aria-hidden="true">
@@ -124,8 +143,13 @@ export function LoginForm() {
             d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"
           />
         </svg>
-        Entrar com Google
+        {googlePending ? "Redirecionando…" : "Entrar com Google"}
       </button>
+      {googleError && (
+        <p role="alert" className="mt-3 rounded-lg bg-red-50 p-3 text-sm text-red-800">
+          Não foi possível iniciar o login com Google. Tente novamente.
+        </p>
+      )}
     </>
   );
 }

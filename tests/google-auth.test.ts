@@ -40,6 +40,11 @@ beforeEach(() => {
 });
 
 describe("login com Google", () => {
+  it("combina PKCE com state no fluxo OAuth", () => {
+    const google = mocks.config!.providers[0] as { options?: { checks?: string[] } };
+    expect(google.options?.checks).toEqual(["pkce", "state"]);
+  });
+
   it("preserva os destinos de recusa sem permitir callback externo", async () => {
     const redirect = mocks.config!.callbacks!.redirect!;
     const baseUrl = "http://localhost:3000";
